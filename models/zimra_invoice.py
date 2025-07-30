@@ -112,7 +112,7 @@ class ZimraInvoice(models.Model):
                 'retry_count': self.retry_count + 1,
                 'error_message': False,
             })
-            return self.pos_order_id.action_fiscalize_invoice()
+            return self.pos_order_id._send_to_zimra()
         return False
 
     def action_cancel_fiscalization(self):

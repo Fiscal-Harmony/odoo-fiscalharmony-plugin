@@ -27,6 +27,7 @@
                         type="object"
                         icon="fa-eye"
                         string=""
+                        invisible="status in ('failed','cancelled','pending')"
                         title="View Invoice"/>
             </tree>
 
@@ -45,11 +46,7 @@
                             type="object"
                             class="btn-primary"
                             invisible="status not in ('failed','cancelled')"/>
-                    <button name="action_cancel_fiscalization"
-                            string="Cancel Fiscalization "
-                            type="object"
-                            class="btn-secondary"
-                            invisible="status in ('fiscalized','cancelled')"/>
+
                     <field name="status" widget="statusbar" statusbar_visible="pending,sent,fiscalized"/>
                 </header>
                 <sheet>

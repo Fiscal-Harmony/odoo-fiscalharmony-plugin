@@ -514,8 +514,9 @@ class ZimraConfig(models.Model):
             _logger.info(" Transaction response string: %s", response.text.strip())
             parsed = response.text.strip()
             fiscalstatus =[parsed]
+            _logger.info("StatusString %s",fiscalstatus)
 
-            time.sleep(3)
+            time.sleep(6)
             response = self.check_fiscalisation_status(fiscalstatus,"/status")
 
             return response

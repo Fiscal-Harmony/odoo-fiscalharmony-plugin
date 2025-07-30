@@ -421,13 +421,13 @@ class PosOrder(models.Model):
         """Get buyer contact information"""
         if not self.partner_id:
             return {
-                "Name": "Walk-in Customer",
-                "TIN": "",
-                "Address": "",
-                "Phone": "",
-                "Email": ""
+
             }
-        tin, vat = self._parse_vat_field(self.partner_id.vat)
+        if self.partner_id.company_registry:
+            vat = self.partner_id.vat
+            tin = self.partner_id.company_registry
+        else:
+         tin, vat = self._parse_vat_field(self.partner_id.vat)
 
         return {
             "Name": self.partner_id.name,
