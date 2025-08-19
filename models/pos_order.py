@@ -177,6 +177,37 @@ class PosOrder(models.Model):
                 _logger.info(
                     f"Successfully fiscalized POS order {self.name} - Fiscal Number: {self.zimra_fiscal_number}")
 
+                # AUTO-DOWNLOAD PDF AFTER SUCCESSFUL FISCALIZATION
+                if self.fiscalized_pdf:
+                    try:
+                        _logger.info(f"Attempting to auto-download PDF for order {self.name}")
+                        pdf_data = config.download_pdf(self.fiscalized_pdf)
+
+                        if isinstance(pdf_data, str):
+                            attachment_vals = {
+                                'name': f'FiscalInvoice_{self.name}.pdf',
+                                'type': 'binary',
+                                'datas': pdf_data,
+                                'res_model': 'pos.order',
+                                'res_id': self.id,
+                                'mimetype': 'application/pdf',
+                            }
+
+                            if self.fiscal_pdf_attachment_id:
+                                self.fiscal_pdf_attachment_id.write(attachment_vals)
+                            else:
+                                attachment = self.env['ir.attachment'].create(attachment_vals)
+                                self.fiscal_pdf_attachment_id = attachment.id
+
+                            _logger.info(f"Successfully auto-downloaded and stored PDF for order {self.name}")
+                        else:
+                            _logger.warning(
+                                f"Failed to auto-download PDF for order {self.name}. Status code: {pdf_data}")
+
+                    except Exception as pdf_error:
+                        _logger.error(f"Error auto-downloading PDF for order {self.name}: {str(pdf_error)}")
+                        # Don't fail the entire fiscalization process if PDF download fails
+
                 return True
 
             else:
@@ -212,7 +243,6 @@ class PosOrder(models.Model):
 
             _logger.error(f"Error fiscalizing POS order {self.name}: {error_msg}")
             return False
-
     def _is_fiscalization_successful(self, response_data):
         """Check if fiscalization response indicates success based on 'Error' field."""
         if not response_data or not isinstance(response_data, list):
@@ -637,24 +667,90 @@ class PosOrder(models.Model):
         }
 
     def action_download_fiscal_pdf(self):
-        """Download the fiscal PDF"""
+        """Download the fiscal PDF using zimra_config and refresh the page"""
         self.ensure_one()
-        if not self.fiscal_pdf_attachment_id:
+
+        if not self.fiscalized_pdf:
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
                 'params': {
                     'title': 'No PDF Available',
-                    'message': 'No fiscal PDF is available for this order',
+                    'message': 'No fiscal PDF is available for this invoice',
                     'type': 'warning',
                 }
             }
 
-        return {
-            'type': 'ir.actions.act_url',
-            'url': f'/web/content/{self.fiscal_pdf_attachment_id.id}?filename={self.fiscal_pdf_attachment_id.name}',
-            'target': 'self',
-        }
+        config = self.env['zimra.config'].search([
+            ('company_id', '=', self.company_id.id),
+            ('active', '=', True)
+        ], limit=1)
+
+        if not config:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Configuration Error',
+                    'message': 'No active ZIMRA configuration found',
+                    'type': 'danger',
+                }
+            }
+
+        try:
+            pdf_data = config.download_pdf(self.fiscalized_pdf)
+
+            if isinstance(pdf_data, str):
+                attachment_vals = {
+                    'name': f'FiscalInvoice_{self.name}.pdf',
+                    'type': 'binary',
+                    'datas': pdf_data,
+                    'res_model': 'account.move',
+                    'res_id': self.id,
+                    'mimetype': 'application/pdf',
+                }
+
+                if self.fiscal_pdf_attachment_id:
+                    self.fiscal_pdf_attachment_id.write(attachment_vals)
+                else:
+                    attachment = self.env['ir.attachment'].create(attachment_vals)
+                    self.fiscal_pdf_attachment_id = attachment.id
+
+                # Return actions: download PDF first, then reload page
+                return [
+                    {
+                        'type': 'ir.actions.act_url',
+                        'url': f'/web/content/{self.fiscal_pdf_attachment_id.id}?download=true',
+                        'target': 'self',
+                    },
+                    {
+                        'type': 'ir.actions.client',
+                        'tag': 'reload',  # refresh the page after download
+                    }
+                ]
+
+            else:
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': 'Download Failed',
+                        'message': f'Failed to download PDF. Server returned status code: {pdf_data}',
+                        'type': 'danger',
+                    }
+                }
+
+        except Exception as e:
+            _logger.error(f"Error downloading fiscal PDF for invoice {self.name}: {str(e)}")
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Download Error',
+                    'message': f'Error downloading PDF: {str(e)}',
+                    'type': 'danger',
+                }
+            }
 
     @api.model
     def cron_retry_failed_fiscalization(self):

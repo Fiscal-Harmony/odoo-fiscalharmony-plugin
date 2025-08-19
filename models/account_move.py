@@ -151,9 +151,11 @@ class AccountMove(models.Model):
 
                 # Return action to download the PDF
                 return {
-                    'type': 'ir.actions.act_url',
-                    'url': f'/web/content/{self.fiscal_pdf_attachment_id.id}?filename=FiscalInvoice_{self.name}.pdf&download=true',
-                    'target': 'self',
+                    'type': 'ir.actions.act_window',
+                    'res_model': 'account.move',
+                    'res_id': self.id,
+                    'view_mode': 'form',
+                    'target': 'current',
                 }
 
             else:  # Error - status code returned
@@ -556,7 +558,7 @@ class AccountMove(models.Model):
                 config = self.env['zimra.config'].search([
                     ('company_id', '=', move.company_id.id),
                     ('active', '=', True),
-                    ('auto_fiscalize', '=', True)  # Use same field as POS
+                    ('auto_fiscalize', '=', False)  # Use same field as POS
                 ], limit=1)
 
                 if config and move.zimra_status == 'pending':
@@ -614,7 +616,7 @@ class AccountMove(models.Model):
                 config = self.env['zimra.config'].search([
                     ('company_id', '=', move.company_id.id),
                     ('active', '=', True),
-                    ('auto_fiscalize', '=', True)
+                    ('auto_fiscalize', '=', False)
                 ], limit=1)
 
                 if config:
@@ -637,7 +639,7 @@ class AccountMove(models.Model):
                     config = self.env['zimra.config'].search([
                         ('company_id', '=', move.company_id.id),
                         ('active', '=', True),
-                        ('auto_fiscalize', '=', True)
+                        ('auto_fiscalize', '=', False)
                     ], limit=1)
 
                     if config:
@@ -652,7 +654,7 @@ class AccountMove(models.Model):
                     config = self.env['zimra.config'].search([
                         ('company_id', '=', move.company_id.id),
                         ('active', '=', True),
-                        ('auto_fiscalize', '=', True)
+                        ('auto_fiscalize', '=', False)
                     ], limit=1)
 
                     if config:
