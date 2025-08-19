@@ -37,6 +37,9 @@ class ZimraConfig(models.Model):
                                     help='Automatically fiscalize POS orders when paid')
     retry_count = fields.Integer('Retry Count', default=3,
                                  help='Number of times to retry failed requests')
+    # In your zimra_config model
+   # auto_fiscalize_invoices = fields.Boolean('Auto-fiscalize Invoices on Post', default=False)
+    #auto_fiscalize_on_payment = fields.Boolean('Auto-fiscalize on Payment', default=False)
 
     # Tax and Currency Mappings
     tax_mapping_ids = fields.One2many('zimra.tax.mapping', 'config_id', 'Tax Mappings')
@@ -135,7 +138,7 @@ class ZimraConfig(models.Model):
         headers = self.__get_headers()
         signature = self.__sign_payload(payload)
 
-        _logger.info(payload)
+
         headers["X-Api-Signature"] = signature
 
 
@@ -213,11 +216,15 @@ class ZimraConfig(models.Model):
 
             log_data["response_status_code"] = response.status_code
 
-            try:
-                response_json = response.json()
-                log_data["response"] = json.dumps(response_json, indent=2)
-            except json.JSONDecodeError:
-                log_data["response"] = response.text
+            content_type = response.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                try:
+                    response_json = response.json()
+                    log_data["response"] = json.dumps(response_json, indent=2)
+                except json.JSONDecodeError:
+                    log_data["response"] = "Invalid JSON response"
+            else:
+                log_data["response"] = f"Non-JSON response (Content-Type: {content_type})"
 
             response.raise_for_status()
             log_data["status"] = "Success"
@@ -302,9 +309,11 @@ class ZimraConfig(models.Model):
             # Handle both dict and string inputs
             if isinstance(data, dict):
                 # Convert dict to compact JSON for signing
+                _logger.info("Converting dict to Json %s",data)
                 body = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
             elif isinstance(data,list):
                  # Convert list to compact JSON for signing
+                 _logger.info("Converting list to Json %s", data)
                  body = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
                  _logger.info(body)
 
@@ -313,8 +322,10 @@ class ZimraConfig(models.Model):
                 try:
                     parsed_data = json.loads(data)
                     body = json.dumps(parsed_data, separators=(',', ':'), ensure_ascii=False)
+                    _logger.info("successfully loaded json %s",body)
                 except json.JSONDecodeError:
                     # If it's not valid JSON, use as-is
+                    _logger.info("no need to  format to json using as is %s",data)
                     body = data
 
         # Generate headers with signature based on the body
@@ -328,6 +339,8 @@ class ZimraConfig(models.Model):
             "body": body,
             "timestamp": datetime.now().isoformat()
         }
+
+        _logger.info("sending this object for fiscalisation %s",log_data)
 
         try:
             if method.upper() == 'POST':
@@ -357,7 +370,8 @@ class ZimraConfig(models.Model):
             log_data["response_status_code"] = response.status_code
 
             try:
-                response_json = response.json()
+                response_json = response.text
+                _logger.info("response plain %s",response.text)
                 log_data["response"] = json.dumps(response_json, indent=2)
             except json.JSONDecodeError:
                 log_data["response"] = response.text
@@ -471,12 +485,15 @@ class ZimraConfig(models.Model):
             response = self.__make_request("/profile")
 
             if response.status_code == 200:
+                data = response.json()
+                user_id = data.get("Id", "Unknown")
+                company = data.get("FullName","Unknown")
                 return {
                     'type': 'ir.actions.client',
                     'tag': 'display_notification',
                     'params': {
                         'title': 'Connection Successful',
-                        'message': 'Successfully connected to Fiscal Harmony API',
+                        'message': f'Successfully connected to Fiscal Harmony API. UserId  {user_id}',
                         'type': 'success',
                         'sticky': False,
                     }
@@ -496,6 +513,7 @@ class ZimraConfig(models.Model):
                 }
             }
 
+
     def send_fiscal_data(self, data: dict, route: str = "/invoice") -> dict:
         """Send fiscal data to ZIMRA API with signature.
 
@@ -508,7 +526,7 @@ class ZimraConfig(models.Model):
         """
         self.ensure_one()
         try:
-            _logger.info(data)
+
             response = self.__make_signed_request(route, data)
 
             _logger.info(" Transaction response string: %s", response.text.strip())

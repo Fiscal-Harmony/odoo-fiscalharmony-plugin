@@ -127,7 +127,7 @@ class PosOrder(models.Model):
             })
 
             fiscal_invoice = json.dumps(invoice_data, separators=(',', ':'), ensure_ascii=False)
-            _logger.info(fiscal_invoice)
+
             invoice_id = invoice_data.get("InvoiceId", "").strip().lower()
 
             # Check for CreditNoteId first
@@ -282,7 +282,7 @@ class PosOrder(models.Model):
 
         # Create timestamp from order date
         timestamp = self.__create_timestamp(self.date_order)
-        _logger.info("pos Object :%s", self)
+
         is_refund = self.name.strip().endswith('REFUND')
 
         data = {
@@ -320,8 +320,9 @@ class PosOrder(models.Model):
 
         # Final payload: choose credit note if it's a refund, else invoice
         final_payload = creditnote if is_refund else data
+        ordername = "Credit Note" if is_refund else "Invoice"
 
-        _logger.info("Credit Note data: %s", final_payload)
+        _logger.info(f"Pos Order {ordername} data: %s", final_payload)
         return final_payload
 
 
@@ -561,7 +562,7 @@ class PosOrder(models.Model):
     @api.model
     def create_from_ui(self, orders, draft=False):
         """Intercept POS orders from UI and auto-fiscalize refunds."""
-        _logger.info("Intercepting POS order creation for refund detection...")
+        _logger.info("Intercepting POS order creation for fiscalizing")
 
         # Mark potential refund orders in the raw input
         for order_data in orders:

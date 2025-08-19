@@ -15,6 +15,7 @@ class ZimraInvoice(models.Model):
 
     name = fields.Char('Invoice Number', required=True, tracking=True)
     pos_order_id = fields.Many2one('pos.order', 'POS Order', ondelete='cascade', tracking=True)
+    account_move_id = fields.Many2one('account.move', 'Account Move', ondelete='cascade', tracking=True)
     zimra_fiscal_number = fields.Char('ZIMRA Fiscal Number', tracking=True)
 
     status = fields.Selection([
@@ -61,6 +62,26 @@ class ZimraInvoice(models.Model):
                 'res_id': self.pos_order_id.id,
                 'view_mode': 'form',
                 'target': 'current',
+            }
+
+    def action_view_related_document(self):
+        """View related POS order or invoice"""
+        self.ensure_one()
+        if self.pos_order_id:
+            return {
+                'type': 'ir.actions.act_window',
+                'name': 'POS Order',
+                'res_model': 'pos.order',
+                'res_id': self.pos_order_id.id,
+                'view_mode': 'form',
+            }
+        elif self.account_move_id:
+            return {
+                'type': 'ir.actions.act_window',
+                'name': 'Invoice',
+                'res_model': 'account.move',
+                'res_id': self.account_move_id.id,
+                'view_mode': 'form',
             }
 
     show_view_invoice = fields.Boolean(string="Can View Invoice", compute="_compute_show_view_invoice")

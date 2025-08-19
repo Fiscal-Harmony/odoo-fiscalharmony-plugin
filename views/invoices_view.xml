@@ -297,6 +297,7 @@
               parent="menu_zimra_invoice"
               action="action_zimra_invoice_pending"
               sequence="5"/>
+
     <record id="action_zimra_invoice_fiscalized" model="ir.actions.act_window">
         <field name="name">Fiscalized Invoices</field>
         <field name="res_model">zimra.invoice</field>
@@ -312,10 +313,65 @@
             </p>
         </field>
     </record>
+
     <menuitem id="menu_zimra_invoice_fiscalized"
               name="Fiscalized Invoices"
               parent="menu_zimra_invoice"
               action="action_zimra_invoice_fiscalized"
               sequence="15"/>
+
+    <!-- Never Fiscalized Invoices Action - Shows accounting invoices not in zimra.invoice -->
+    <record id="action_accounting_invoice_never_fiscalized" model="ir.actions.act_window">
+        <field name="name">Acounting Invoices</field>
+        <field name="res_model">account.move</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('move_type', 'in', ['out_invoice', 'out_refund']), ('state', '=', 'posted')]</field>
+        <field name="context">{'search_default_never_fiscalized': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No accounting invoices that were never fiscalized!
+            </p>
+            <p>
+                This view shows posted customer invoices and credit notes from the accounting module
+                that have never been sent for fiscalization to ZIMRA.
+            </p>
+        </field>
+    </record>
+
+    <menuitem id="menu_zimra_invoice_never_fiscalized"
+              name="Accounting Invoices"
+              parent="menu_zimra_invoice"
+              action="action_accounting_invoice_never_fiscalized"
+              sequence="25"/>
+
+    <!-- Inherit account.move form view to add fiscalize button -->
+    <record id="view_account_move_form_inherit_zimra" model="ir.ui.view">
+        <field name="name">account.move.form.inherit.zimra</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+             <xpath expr="//sheet" position="inside">
+            <field name="zimra_status" invisible="1"/>
+        </xpath>
+
+            <xpath expr="//header" position="inside">
+                <button name="action_fiscalize_invoice"
+                        string="Fiscalize Invoice"
+                        type="object"
+                        class="btn-primary"
+                        invisible="move_type not in ('out_invoice', 'out_refund') or state != 'posted' or zimra_status in ('fiscalized', 'sent')"
+                        confirm="Are you sure you want to fiscalize this invoice with ZIMRA?"/>
+            </xpath>
+             <xpath expr="//header" position="inside">
+                <button name="action_download_fiscal_pdf"
+                        string="Download Fiscal Invoice"
+                        type="object"
+                        class="btn-primary"
+                        invisible=" zimra_status not in ('fiscalized')"
+                        />
+            </xpath>
+
+        </field>
+    </record>
 
 </odoo>

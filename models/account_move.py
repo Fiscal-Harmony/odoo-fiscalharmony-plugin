@@ -5,6 +5,7 @@ import json
 import requests
 import logging
 from datetime import datetime
+import base64
 
 _logger = logging.getLogger(__name__)
 
@@ -32,8 +33,12 @@ class AccountMove(models.Model):
     # Additional ZIMRA fields
     zimra_qr_code = fields.Char('ZIMRA QR Code', readonly=True, copy=False)
     zimra_verification_url = fields.Char('ZIMRA Verification URL', readonly=True, copy=False)
+    fiscal_pdf_attachment_id = fields.Many2one('ir.attachment', 'Fiscal PDF', readonly=True, copy=False)
 
-    def action_fiscalize_manual(self):
+    # Add field to store PDF data like POS
+    fiscalized_pdf = fields.Char('Fiscalized Pdf', readonly=True, copy=False)
+
+    def action_fiscalize_invoice(self):
         """Manual fiscalization action for invoices"""
         self.ensure_one()
 
@@ -62,13 +67,19 @@ class AccountMove(models.Model):
         result = self._send_to_zimra()
 
         if result:
+            message = f'Invoice {self.name} has been successfully fiscalized'
+            if self.fiscal_pdf_attachment_id:
+                pdf_url = f'/web/content/{self.fiscal_pdf_attachment_id.id}?filename=FiscalInvoice_{self.name}.pdf'
+                message += f'. <a href="{pdf_url}" target="_blank" class="btn btn-primary btn-sm">View PDF</a>'
+
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
                 'params': {
                     'title': 'Fiscalization Successful',
-                    'message': f'Invoice {self.name} has been successfully fiscalized',
+                    'message': message,
                     'type': 'success',
+                    'sticky': bool(self.fiscal_pdf_attachment_id),
                 }
             }
         else:
@@ -82,8 +93,93 @@ class AccountMove(models.Model):
                 }
             }
 
+    def action_download_fiscal_pdf(self):
+        """Download the fiscal PDF using zimra_config download method"""
+        self.ensure_one()
+
+        # Check if we have fiscal PDF data
+        if not self.fiscalized_pdf:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'No PDF Available',
+                    'message': 'No fiscal PDF is available for this invoice',
+                    'type': 'warning',
+                }
+            }
+
+        try:
+            # Get configuration
+            config = self.env['zimra.config'].search([
+                ('company_id', '=', self.company_id.id),
+                ('active', '=', True)
+            ], limit=1)
+
+            if not config:
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': 'Configuration Error',
+                        'message': 'No active ZIMRA configuration found',
+                        'type': 'danger',
+                    }
+                }
+
+            # Use the config's download_pdf method
+            pdf_data = config.download_pdf(self.fiscalized_pdf)
+
+            if isinstance(pdf_data, str):  # Success - PDF data returned
+                # Create or update the PDF attachment
+                attachment_vals = {
+                    'name': f'FiscalInvoice_{self.name}.pdf',
+                    'type': 'binary',
+                    'datas': pdf_data,
+                    'res_model': 'account.move',
+                    'res_id': self.id,
+                    'mimetype': 'application/pdf',
+                }
+
+                if self.fiscal_pdf_attachment_id:
+                    # Update existing attachment
+                    self.fiscal_pdf_attachment_id.write(attachment_vals)
+                else:
+                    # Create new attachment
+                    attachment = self.env['ir.attachment'].create(attachment_vals)
+                    self.fiscal_pdf_attachment_id = attachment.id
+
+                # Return action to download the PDF
+                return {
+                    'type': 'ir.actions.act_url',
+                    'url': f'/web/content/{self.fiscal_pdf_attachment_id.id}?filename=FiscalInvoice_{self.name}.pdf&download=true',
+                    'target': 'self',
+                }
+
+            else:  # Error - status code returned
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': 'Download Failed',
+                        'message': f'Failed to download PDF. Server returned status code: {pdf_data}',
+                        'type': 'danger',
+                    }
+                }
+
+        except Exception as e:
+            _logger.error(f"Error downloading fiscal PDF for invoice {self.name}: {str(e)}")
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Download Error',
+                    'message': f'Error downloading PDF: {str(e)}',
+                    'type': 'danger',
+                }
+            }
     def _send_to_zimra(self):
-        """Send invoice to ZIMRA"""
+        """Send invoice to ZIMRA using the same approach as POS orders"""
         self.ensure_one()
 
         # Get configuration
@@ -94,7 +190,7 @@ class AccountMove(models.Model):
 
         if not config:
             self.zimra_status = 'failed'
-            self.zimra_error = 'No active ZIMRA configuration found'
+            self.zimra_error = 'No active FiscalHarmony configuration found'
             _logger.error(f"No ZIMRA configuration found for company {self.company_id.name}")
             return False
 
@@ -116,88 +212,122 @@ class AccountMove(models.Model):
                 'company_id': self.company_id.id,
             })
 
-            # Send to ZIMRA
-            headers = {
-                'Authorization': f'Bearer {config.api_key}',
-                'Content-Type': 'application/json'
-            }
-
-            invoice_url = f"{config.api_url}/invoices" if config.api_url.endswith('/') else f"{config.api_url}/invoices"
-
-            response = requests.post(
-                invoice_url,
-                json=invoice_data,
-                headers=headers,
-                timeout=config.timeout
-            )
-
-            # Update fields
+            # Update fields before sending
             self.zimra_sent_date = fields.Datetime.now()
-            self.zimra_response = response.text
             self.zimra_retry_count += 1
 
             # Update invoice log
             zimra_invoice.write({
                 'status': 'sent',
                 'sent_date': self.zimra_sent_date,
-                'response_data': response.text,
             })
 
-            if response.status_code == 200:
-                response_data = response.json()
+            fiscal_invoice = json.dumps(invoice_data, separators=(',', ':'), ensure_ascii=False)
+
+            # Determine endpoint (same logic as POS)
+            invoice_id = invoice_data.get("InvoiceId", "").strip().lower()
+
+            # Check for CreditNoteId first
+            if "CreditNoteId" in invoice_data and invoice_data["CreditNoteId"]:
+                endpoint = "/creditnote"
+            # Fallback: check if 'refund' is in the invoice ID
+            elif "refund" in invoice_id:
+                endpoint = "/creditnote"
+            else:
+                endpoint = "/invoice"
+
+            response_data = config.send_fiscal_data(fiscal_invoice, endpoint)
+            _logger.info("ZIMRA says:%s", response_data)
+
+            # Store the response
+            self.zimra_response = json.dumps(response_data) if response_data else ''
+
+            # Update invoice log
+            zimra_invoice.write({
+                'response_data': self.zimra_response,
+            })
+
+            # Check if fiscalization was successful (same logic as POS)
+            if self._is_fiscalization_successful(response_data):
+                # response_data is a list, so get the first element
+                response = response_data[0] if response_data else {}
+                fiscalday = response.get("FiscalDay")
+                invoice_number = response.get("InvoiceNumber")
 
                 self.zimra_status = 'fiscalized'
-                self.zimra_fiscal_number = response_data.get('fiscal_number', response_data.get('receiptNumber'))
+                self.zimra_fiscal_number = f"{invoice_number}/{fiscalday}"
                 self.zimra_fiscalized_date = fields.Datetime.now()
-                self.zimra_qr_code = response_data.get('qr_code')
-                self.zimra_verification_url = response_data.get('verification_url')
+                self.zimra_qr_code = response.get('QrData')
+                self.zimra_verification_url = response.get('verification_url')
+
+                # Store PDF data like POS
+                self.fiscalized_pdf = response.get('FiscalInvoicePdf')
+                _logger.info("Fiscal pdf is %s", self.fiscalized_pdf)
+
+
+
+                # Clear any previous errors
+                self.zimra_error = False
 
                 # Update invoice log
                 zimra_invoice.write({
                     'status': 'fiscalized',
-                    'zimra_fiscal_number': self.zimra_fiscal_number,
+                    'zimra_fiscal_number': f"{invoice_number}/{fiscalday}",
                     'fiscalized_date': self.zimra_fiscalized_date,
                 })
 
                 _logger.info(
                     f"Successfully fiscalized invoice {self.name} - Fiscal Number: {self.zimra_fiscal_number}")
+
                 return True
 
             else:
+                # response_data is a list, so get the first element
+                response = response_data[0] if response_data else {}
+
                 self.zimra_status = 'failed'
-                self.zimra_error = f"HTTP {response.status_code}: {response.text}"
+                self.zimra_fiscal_number = response.get('fiscal_number', response.get('RequestId'))
+                self.zimra_error = response.get('Error')
 
                 # Update invoice log
                 zimra_invoice.write({
                     'status': 'failed',
                     'error_message': self.zimra_error,
+                    'zimra_fiscal_number': self.zimra_fiscal_number,
                 })
 
-                _logger.error(f"Failed to fiscalize invoice {self.name}: {response.text}")
+                _logger.error(
+                    f"Failed to fiscalize invoice {self.name} - Error: {self.zimra_error}")
                 return False
-
-        except requests.exceptions.Timeout:
-            error_msg = f"Timeout after {config.timeout} seconds"
-            self.zimra_status = 'failed'
-            self.zimra_error = error_msg
-            _logger.error(f"Timeout fiscalizing invoice {self.name}: {error_msg}")
-            return False
 
         except Exception as e:
             error_msg = str(e)
             self.zimra_status = 'failed'
             self.zimra_error = error_msg
+
+            # Update invoice log if it exists
+            if 'zimra_invoice' in locals():
+                zimra_invoice.write({
+                    'status': 'failed',
+                    'error_message': error_msg,
+                })
+
             _logger.error(f"Error fiscalizing invoice {self.name}: {error_msg}")
             return False
 
-    def _should_fiscalize(self):
-        """Check if invoice should be fiscalized"""
-        # Only fiscalize customer invoices
-        if not self.is_invoice(include_receipts=True):
+
+    def _is_fiscalization_successful(self, response_data):
+        """Check if fiscalization response indicates success based on 'Error' field."""
+        if not response_data or not isinstance(response_data, list):
             return False
 
-        # Skip if amount is zero or negative
-        if self.amount_total <= 0:
+        response = response_data[0]
+        return not response.get("Error")  # True if Error is None or ''
+
+    def _should_fiscalize(self):
+        """Check if invoice should be fiscalized"""
+        # Only fiscalize customer invoices and credit notes
+        if not self.is_invoice(include_receipts=True):
             return False
 
         # Skip if already fiscalized
@@ -208,16 +338,8 @@ class AccountMove(models.Model):
         if self.state != 'posted':
             return False
 
-        # Skip draft invoices
-        if self.payment_state == 'draft':
-            return False
-
-        # Skip credit notes (refunds) - handle separately if needed
-        if self.move_type == 'out_refund':
-            return False
-
-        # Only customer invoices
-        if self.move_type != 'out_invoice':
+        # Only customer invoices and credit notes
+        if self.move_type not in ['out_invoice', 'out_refund']:
             return False
 
         return True
@@ -243,46 +365,81 @@ class AccountMove(models.Model):
         has_discount = any(line.discount > 0 for line in self.invoice_line_ids)
 
         # Create timestamp from invoice date
-        invoice_datetime = self.invoice_date or fields.Date.today()
-        timestamp = self.__create_timestamp(invoice_datetime)
+        timestamp = self.__create_timestamp(self.invoice_date or fields.Date.today())
 
-        # Prepare main invoice data in ZIMRA format
-        data = {
-            "InvoiceId": self.name,
-            "InvoiceNumber": self.name,
-            "Reference": self.ref or "",
-            "IsDiscounted": has_discount,
-            "IsTaxInclusive": True,
-            "BuyerContact": buyer_contact,
-            "Date": timestamp,
-            "LineItems": line_items,
-            "SubTotal": round(self.amount_untaxed, 2),
-            "TotalTax": round(self.amount_tax, 2),
-            "Total": round(self.amount_total, 2),
-            "CurrencyCode": currency_code,
-            "IsRetry": bool(self.zimra_retry_count > 0),
-        }
+        # Determine if this is a credit note
+        is_credit_note = self.move_type == 'out_refund'
 
+        if is_credit_note:
+            # Credit Note format
+            data = {
+                "CreditNoteId": self.name,
+                "CreditNoteNumber": self.name,
+                "OriginalInvoiceId": self.reversed_entry_id.name if self.reversed_entry_id else "",
+                "Reference": self.ref or '',
+                "IsTaxInclusive": True,
+                "BuyerContact": buyer_contact,
+                "Date": timestamp,
+                "LineItems": line_items,
+                "SubTotal": f"{abs(self.amount_untaxed):.2f}",
+                "TotalTax": f"{abs(self.amount_tax):.2f}",
+                "Total": f"{abs(self.amount_total):.2f}",
+                "CurrencyCode": currency_code,
+                "IsRetry": bool(self.zimra_retry_count > 0),
+            }
+        else:
+            # Regular Invoice format
+            data = {
+                "InvoiceId": self.name,
+                "InvoiceNumber": self.name,
+                "Reference": self.ref or "",
+                "IsDiscounted": has_discount,
+                "IsTaxInclusive": True,
+                "BuyerContact": buyer_contact,
+                "Date": timestamp,
+                "LineItems": line_items,
+                "SubTotal": f"{self.amount_untaxed:.2f}",
+                "TotalTax": f"{self.amount_tax:.2f}",
+                "Total": f"{self.amount_total:.2f}",
+                "CurrencyCode": currency_code,
+                "IsRetry": bool(self.zimra_retry_count > 0),
+            }
+
+        _logger.info(f"Account Move {'Credit Note' if is_credit_note else 'Invoice'} data: %s", data)
         return data
 
     def __get_buyer_contact(self):
         """Get buyer contact information"""
         if not self.partner_id:
-            return {
-                "Name": "Walk-in Customer",
-                "TIN": "",
-                "Address": "",
-                "Phone": "",
-                "Email": ""
-            }
+            return {}
+
+        # Handle TIN/VAT parsing similar to POS
+        if self.partner_id.company_registry:
+            vat = self.partner_id.vat
+            tin = self.partner_id.company_registry
+        else:
+            tin, vat = self._parse_vat_field(self.partner_id.vat)
 
         return {
             "Name": self.partner_id.name,
-            "TIN": self.partner_id.vat or "",
+            "Tin": tin,
+            "VatNumber": vat,
             "Address": self._get_customer_address(),
             "Phone": self.partner_id.phone or "",
             "Email": self.partner_id.email or ""
         }
+
+    def _parse_vat_field(self, vat_string):
+        """Parse VAT string to extract TIN and VAT numbers"""
+        import re
+
+        match_tin = re.search(r'TIN[:=]\s*(\d+)', vat_string or "")
+        tin = match_tin.group(1) if match_tin else ''
+
+        match_vat = re.search(r'VAT[:=]\s*(\d+)', vat_string or "")
+        vat = match_vat.group(1) if match_vat else ''
+
+        return tin, vat
 
     def __get_line_items(self, tax_mappings):
         """Get line items in ZIMRA format"""
@@ -293,35 +450,66 @@ class AccountMove(models.Model):
             if line.display_type in ['line_section', 'line_note']:
                 continue
 
-            # Calculate tax information
+            # Calculate tax information using Odoo's tax computation
             tax_amount = 0
             tax_code = ""
-            tax_rate = 0
 
             if line.tax_ids:
+                # Use Odoo's tax computation
+                tax_results = line.tax_ids.compute_all(
+                    price_unit=line.price_unit,
+                    quantity=line.quantity,
+                    product=line.product_id,
+                    partner=self.partner_id
+                )
+
+                tax_amount = tax_results['total_included'] - tax_results['total_excluded']
+
+                # Get tax code from mapping
                 for tax in line.tax_ids:
                     if tax.id in tax_mappings:
                         tax_mapping = tax_mappings[tax.id]
-                        tax_amount += (line.price_subtotal * tax_mapping.zimra_tax_rate / 100)
                         tax_code = tax_mapping.zimra_tax_code
-                        tax_rate = tax_mapping.zimra_tax_rate
+                        break
 
-            # Calculate discount amount
+            # Safely split product name into name and hscode
+            if line.product_id:
+                try:
+                    name, hscode = line.product_id.name.rsplit(' ', 1)
+                except ValueError:
+                    name = line.product_id.name
+                    hscode = ''
+            else:
+                name = line.name or "Service"
+                hscode = ''
+
+            # Calculate discount if applicable
             discount_amount = 0
             if line.discount:
                 discount_amount = line.price_unit * line.quantity * line.discount / 100
 
+            # For credit notes, use absolute values
+            if self.move_type == 'out_refund':
+                unit_amount = abs(
+                    line.price_subtotal_incl if hasattr(line, 'price_subtotal_incl') else line.price_total)
+                line_amount = abs(
+                    line.price_subtotal_incl if hasattr(line, 'price_subtotal_incl') else line.price_total)
+                quantity = abs(line.quantity)
+                discount_amount = abs(discount_amount)
+            else:
+                unit_amount = line.price_subtotal_incl if hasattr(line, 'price_subtotal_incl') else line.price_total
+                line_amount = line.price_subtotal_incl if hasattr(line, 'price_subtotal_incl') else line.price_total
+                quantity = line.quantity
+
+            # Build the line item
             line_item = {
-                "ItemCode": line.product_id.default_code or str(line.product_id.id) if line.product_id else "SERVICE",
-                "Description": line.name or (line.product_id.name if line.product_id else "Service"),
-                "Quantity": line.quantity,
-                "UnitPrice": round(line.price_unit, 2),
-                "Discount": round(discount_amount, 2),
-                "SubTotal": round(line.price_subtotal, 2),
+                "Description": name,
+                "UnitAmount": f"{abs(unit_amount / quantity):.3f}" if quantity != 0 else "0.000",
                 "TaxCode": tax_code,
-                "TaxRate": tax_rate,
-                "TaxAmount": round(tax_amount, 2),
-                "Total": round(line.price_subtotal + tax_amount, 2)
+                "ProductCode": hscode,
+                "LineAmount": f"{abs(line_amount):.2f}",
+                "DiscountAmount": f"{abs(discount_amount):.2f}",
+                "Quantity": f"{abs(quantity):.3f}",
             }
 
             line_items.append(line_item)
@@ -329,52 +517,52 @@ class AccountMove(models.Model):
         return line_items
 
     def __create_timestamp(self, date_field):
-        """Create timestamp from date field"""
+        """Create timestamp in ISO format"""
+        if not date_field:
+            date_field = fields.Datetime.now()
+
         if isinstance(date_field, str):
             return date_field
 
-        if hasattr(date_field, 'strftime'):
-            return date_field.strftime('%Y-%m-%d %H:%M:%S')
+        # Convert date to datetime if needed
+        if hasattr(date_field, 'replace'):
+            if hasattr(date_field, 'hour'):  # It's already a datetime
+                return date_field.replace(microsecond=0).isoformat()
+            else:  # It's a date, convert to datetime
+                dt = datetime.combine(date_field, datetime.now().time())
+                return dt.replace(microsecond=0).isoformat()
 
         return str(date_field)
 
     def _get_customer_address(self):
-        """Get customer address"""
+        """Get customer address as a structured dictionary"""
         if not self.partner_id:
-            return ''
+            return {}
 
-        address_parts = []
-        for field in ['street', 'street2', 'city', 'zip']:
-            value = getattr(self.partner_id, field, '')
-            if value:
-                address_parts.append(value)
-
-        if self.partner_id.state_id:
-            address_parts.append(self.partner_id.state_id.name)
-        if self.partner_id.country_id:
-            address_parts.append(self.partner_id.country_id.name)
-
-        return ', '.join(address_parts)
+        return {
+            "Province": self.partner_id.state_id.name if self.partner_id.state_id else '',
+            "Street": self.partner_id.street2 or '',
+            "HouseNo": self.partner_id.street or '',
+            "City": self.partner_id.city or ''
+        }
 
     def action_post(self):
         """Override action_post to auto-fiscalize when invoice is posted"""
         result = super(AccountMove, self).action_post()
 
-        # Auto-fiscalize customer invoices
+        # Auto-fiscalize customer invoices and credit notes
         for move in self:
-            if move.is_invoice() and move.move_type == 'out_invoice':
+            if move._should_fiscalize():
                 config = self.env['zimra.config'].search([
                     ('company_id', '=', move.company_id.id),
                     ('active', '=', True),
-                    ('auto_fiscalize_invoices', '=', True)  # New config field
+                    ('auto_fiscalize', '=', True)  # Use same field as POS
                 ], limit=1)
 
                 if config and move.zimra_status == 'pending':
-                    # Use queue job if available, otherwise direct call
-                    if hasattr(move, 'with_delay'):
-                        move.with_delay()._send_to_zimra()
-                    else:
-                        move._send_to_zimra()
+                    fiscalize_result = move._send_to_zimra()
+                    if not fiscalize_result:
+                        _logger.error(f"Auto-fiscalization failed for invoice {move.name}")
 
         return result
 
@@ -406,18 +594,33 @@ class AccountMove(models.Model):
                     'zimra_fiscalized_date': False,
                     'zimra_qr_code': False,
                     'zimra_verification_url': False,
+                    'fiscal_pdf_attachment_id': False,
+                    'fiscalized_pdf': False,
                 })
 
         return result
 
     @api.model
     def create(self, vals):
-        """Override create to set initial ZIMRA status"""
+        """Override create to set initial ZIMRA status and auto-fiscalize if posted"""
         move = super(AccountMove, self).create(vals)
 
-        # Set initial status for customer invoices
-        if move.is_invoice() and move.move_type == 'out_invoice':
+        # Set initial status
+        if move.is_invoice() and move.move_type in ['out_invoice', 'out_refund']:
             move.zimra_status = 'pending'
+
+            # Auto-fiscalize if already posted and configuration allows
+            if move.state == 'posted':
+                config = self.env['zimra.config'].search([
+                    ('company_id', '=', move.company_id.id),
+                    ('active', '=', True),
+                    ('auto_fiscalize', '=', True)
+                ], limit=1)
+
+                if config:
+                    fiscalize_result = move._send_to_zimra()
+                    if not fiscalize_result:
+                        _logger.error(f"Auto-fiscalization failed for invoice {move.name}")
         else:
             move.zimra_status = 'exempted'
 
@@ -427,22 +630,81 @@ class AccountMove(models.Model):
         """Override write to handle state changes"""
         result = super(AccountMove, self).write(vals)
 
-        # Handle payment state changes
-        if 'payment_state' in vals:
+        # Handle state changes to 'posted'
+        if 'state' in vals and vals['state'] == 'posted':
             for move in self:
-                if (move.is_invoice() and move.move_type == 'out_invoice' and
-                        move.payment_state == 'paid' and move.zimra_status == 'pending'):
-
+                if move._should_fiscalize() and move.zimra_status == 'pending':
                     config = self.env['zimra.config'].search([
                         ('company_id', '=', move.company_id.id),
                         ('active', '=', True),
-                        ('auto_fiscalize_on_payment', '=', True)  # New config field
+                        ('auto_fiscalize', '=', True)
                     ], limit=1)
 
                     if config:
-                        if hasattr(move, 'with_delay'):
-                            move.with_delay()._send_to_zimra()
-                        else:
-                            move._send_to_zimra()
+                        fiscalize_result = move._send_to_zimra()
+                        if not fiscalize_result:
+                            _logger.error(f"Auto-fiscalization failed for invoice {move.name}")
+
+        # Handle payment state changes
+        if 'payment_state' in vals and vals['payment_state'] == 'paid':
+            for move in self:
+                if move._should_fiscalize() and move.zimra_status == 'pending':
+                    config = self.env['zimra.config'].search([
+                        ('company_id', '=', move.company_id.id),
+                        ('active', '=', True),
+                        ('auto_fiscalize', '=', True)
+                    ], limit=1)
+
+                    if config:
+                        fiscalize_result = move._send_to_zimra()
+                        if not fiscalize_result:
+                            _logger.error(f"Auto-fiscalization failed for invoice {move.name}")
 
         return result
+
+    def action_retry_fiscalization(self):
+        """Retry fiscalization for failed invoices"""
+        self.ensure_one()
+        if self.zimra_status != 'failed':
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Cannot Retry',
+                    'message': 'Only failed invoices can be retried',
+                    'type': 'warning',
+                }
+            }
+
+        # Reset status to pending and retry
+        self.zimra_status = 'pending'
+        self.zimra_error = False
+
+        return self.action_fiscalize_invoice()
+
+    def action_view_zimra_logs(self):
+        """View ZIMRA logs for this invoice"""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'ZIMRA Logs',
+            'res_model': 'zimra.invoice',
+            'view_mode': 'tree,form',
+            'domain': [('account_move_id', '=', self.id)],
+            'context': {'default_account_move_id': self.id}
+        }
+
+    @api.model
+    def cron_retry_failed_fiscalization(self):
+        """Cron job to retry failed fiscalization for invoices"""
+        failed_invoices = self.search([
+            ('zimra_status', '=', 'failed'),
+            ('zimra_retry_count', '<', 3)  # Only retry up to 3 times
+        ])
+
+        for invoice in failed_invoices:
+            try:
+                invoice._send_to_zimra()
+                _logger.info(f"Successfully retried fiscalization for invoice: {invoice.name}")
+            except Exception as e:
+                _logger.error(f"Failed to retry fiscalization for invoice {invoice.name}: {str(e)}")
