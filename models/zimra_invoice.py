@@ -123,17 +123,56 @@ class ZimraInvoice(models.Model):
             'url': f'/web/content/{attachment.id}?download=true',
             'target': 'new',
         }
+
     def action_retry_fiscalization(self):
-        """Retry fiscalization"""
+        """Retry fiscalization for both POS orders and accounting invoices"""
         self.ensure_one()
-        if self.pos_order_id and self.status in ['failed', 'cancelled']:
-            self.message_post(body="Fiscalization retry initiated by user.")
+
+        if self.status not in ['failed', 'cancelled']:
+            raise UserError("Can only retry failed or cancelled fiscalizations.")
+
+        # Update status and retry count
+        self.message_post(body="Fiscalization retry initiated by user.")
+        self.write({
+            'status': 'pending',
+            'retry_count': self.retry_count + 1,
+            'error_message': False,
+        })
+
+        try:
+            # Handle POS Order retry
+            if self.pos_order_id:
+                if not self.pos_order_id.exists():
+                    raise UserError("Related POS order no longer exists.")
+                return self.pos_order_id._send_to_zimra()
+
+            # Handle Account Move (Invoice) retry
+            elif self.account_move_id:
+                if not self.account_move_id.exists():
+                    raise UserError("Related invoice no longer exists.")
+
+                # Check if invoice is in valid state for fiscalization
+                if self.account_move_id.state != 'posted':
+                    raise UserError("Invoice must be posted to retry fiscalization.")
+
+                # Check if the method exists on account.move
+                if not hasattr(self.account_move_id, '_send_to_zimra'):
+                    raise UserError("Fiscalization method not implemented for invoices.")
+
+                return self.account_move_id._send_to_zimra()
+
+            else:
+                raise UserError("No related POS order or invoice found for this ZIMRA record.")
+
+        except Exception as e:
+            # Revert status on error
             self.write({
-                'status': 'pending',
-                'retry_count': self.retry_count + 1,
-                'error_message': False,
+                'status': 'failed',
+                'error_message': str(e),
             })
-            return self.pos_order_id._send_to_zimra()
+            self.message_post(body=f"Retry failed: {str(e)}")
+            raise
+
         return False
 
     def action_cancel_fiscalization(self):

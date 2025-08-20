@@ -669,6 +669,7 @@ class ZimraConfig(models.Model):
             return  pdf_data
         else:
             return response.status_code
+
     def sync_device_taxes(self):
         """Sync taxes from device endpoint to local tax mappings.
 
@@ -685,10 +686,9 @@ class ZimraConfig(models.Model):
                 raise ValidationError("Failed to fetch device data")
 
             # Extract taxes from device response
-            # Adjust this based on your actual API response structure
             taxes = device_data
             if not taxes:
-                taxes = []  # Alternative key
+                taxes = []
 
             if not taxes:
                 raise ValidationError("No taxes found in device response")
@@ -696,23 +696,40 @@ class ZimraConfig(models.Model):
             # Clear existing tax mappings for this config
             self.tax_mapping_ids.unlink()
 
+            # Get the tax mapping model to use its normalization method
+            TaxMapping = self.env['zimra.tax.mapping']
+
             # Create new tax mappings from device response
             tax_mappings = []
+            _logger.info("Taxes Pulled are %s", taxes)
+
+            # Get the tax mapping model to use its normalization method
+            TaxMapping = self.env['zimra.tax.mapping']
+
             for tax_data in taxes:
-                # Adjust field mapping based on your actual response structure
+                tax_name = tax_data.get('taxName', '')
+
+                # Use the model's normalization method for consistency
+                tax_type = TaxMapping.normalize_tax_type(tax_name)
+
+                # Extract tax rate properly - it should come from taxPercent, not default to 0.0
+                tax_rate = tax_data.get('taxPercent', 0.0)
+                if tax_rate is None:  # Handle None values for exempt taxes
+                    tax_rate = 0.0
+
                 tax_mapping = {
                     'config_id': self.id,
                     'zimra_tax_code': tax_data.get('taxID', ''),
-                    'zimra_tax_name': tax_data.get('taxName', ''),
-                    'zimra_tax_rate': 0.0,
-                    'zimra_tax_type': tax_data.get('taxName', 'VAT'),
-                    # Add other fields as needed
+                    'zimra_tax_name': tax_name,
+                    'zimra_tax_rate': tax_rate,
+                    'zimra_tax_type': tax_type,
                 }
                 tax_mappings.append((0, 0, tax_mapping))
-                _logger.info(tax_mappings)
+                _logger.info("Creating tax mapping: %s -> %s", tax_name, tax_type)
 
             # Update the tax mappings
-            self.write({'tax_mapping_ids': tax_mappings})
+            if tax_mappings:
+                self.write({'tax_mapping_ids': tax_mappings})
 
             return {
                 'type': 'ir.actions.client',
@@ -725,6 +742,18 @@ class ZimraConfig(models.Model):
                 }
             }
 
+        except ValidationError as ve:
+            _logger.error(f"Validation error syncing device taxes: {str(ve)}")
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Sync Failed',
+                    'message': f'Validation error: {str(ve)}',
+                    'type': 'danger',
+                    'sticky': True,
+                }
+            }
         except Exception as e:
             _logger.error(f"Failed to sync device taxes: {str(e)}")
             return {
@@ -737,7 +766,6 @@ class ZimraConfig(models.Model):
                     'sticky': True,
                 }
             }
-
     def get_available_taxes(self):
         """Get available taxes for this device configuration.
 
