@@ -386,7 +386,16 @@ class PosOrder(models.Model):
 
             # Safely split product name into name and hscode
             try:
-                name, hscode = line.product_id.name.rsplit(' ', 1)
+                match = re.search(r'\b\d{8,}\b', line.product_id.name)
+                if match:
+                    hscode = match.group()
+                    # Remove the HS code from the name
+                    name = re.sub(r'\b' + re.escape(hscode) + r'\b', '', line.product_id.name).strip()
+                    # Clean up multiple spaces
+                    name = re.sub(r'\s+', ' ', name)
+                else:
+                    name = line.product_id.name
+                    hscode = ''
             except ValueError:
                 name = line.product_id.name
                 hscode = ''
