@@ -312,6 +312,11 @@ class PosOrder(models.Model):
 
         # Create timestamp from order date
         timestamp = self.__create_timestamp(self.date_order)
+        total_discount = sum(
+            float(item.get("DiscountAmount", "0"))
+            for item in line_items
+        )
+        subtotal = self.amount_total - total_discount
 
         is_refund = self.name.strip().endswith('REFUND')
 
@@ -324,9 +329,9 @@ class PosOrder(models.Model):
             "BuyerContact": buyer_contact,
             "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "LineItems": line_items,
-            "SubTotal": f"{self.amount_total - self.amount_tax:.2f}",
+            "SubTotal": f"{subtotal - self.amount_tax:.2f}",
             "TotalTax": f"{self.amount_tax:.2f}",
-            "Total": f"{self.amount_total:.2f}",
+            "Total": f"{self.amount_total-total_discount:.2f}",
             "CurrencyCode": currency_code,
             "IsRetry": bool(self.zimra_retry_count > 0),
         }
@@ -340,9 +345,9 @@ class PosOrder(models.Model):
             "BuyerContact": buyer_contact,
             "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "LineItems": line_items,
-            "SubTotal": f"{abs(self.amount_total - self.amount_tax):.2f}",
+            "SubTotal": f"{abs(subtotal - self.amount_tax):.2f}",
             "TotalTax": f"{abs(self.amount_tax):.2f}",
-            "Total": f"{abs(self.amount_total):.2f}",
+            "Total": f"{abs(self.amount_total-total_discount):.2f}",
             "CurrencyCode": currency_code,
             "IsRetry": bool(self.zimra_retry_count > 0),
 
@@ -413,10 +418,10 @@ class PosOrder(models.Model):
             # Build the line item with absolute values
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(unit_amount):.3f}",
+                "UnitAmount": f"{abs(unit_amount-discount_amount):.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line_amount):.2f}",
+                "LineAmount": f"{abs(line_amount-discount_amount):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(quantity):.3f}",
             }
@@ -529,10 +534,10 @@ class PosOrder(models.Model):
             # Build the line item
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(line.price_subtotal_incl/line.qty):.3f}",
+                "UnitAmount": f"{abs(line.price_subtotal_incl/line.qty)-discount_amount:.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line.price_subtotal_incl):.2f}",
+                "LineAmount": f"{abs(line.price_subtotal_incl-discount_amount):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(line.qty):.3f}",
             }

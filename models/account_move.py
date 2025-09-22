@@ -369,6 +369,10 @@ class AccountMove(models.Model):
 
         # Create timestamp from invoice date
         timestamp = self.__create_timestamp(self.invoice_date or fields.Date.today())
+        total_discount = sum(
+            float(item.get("DiscountAmount", "0"))
+            for item in line_items
+        )
 
         # Determine if this is a credit note
         is_credit_note = self.move_type == 'out_refund'
@@ -384,9 +388,9 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{abs(self.amount_untaxed):.2f}",
+                "SubTotal": f"{abs(self.amount_untaxed)-total_discount:.2f}",
                 "TotalTax": f"{abs(self.amount_tax):.2f}",
-                "Total": f"{abs(self.amount_total):.2f}",
+                "Total": f"{abs(self.amount_total-total_discount):.2f}",
                 "CurrencyCode": currency_code,
                 "IsRetry": bool(self.zimra_retry_count > 0),
             }
@@ -401,9 +405,9 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{self.amount_untaxed:.2f}",
+                "SubTotal": f"{self.amount_untaxed-total_discount:.2f}",
                 "TotalTax": f"{self.amount_tax:.2f}",
-                "Total": f"{self.amount_total:.2f}",
+                "Total": f"{self.amount_total-total_discount:.2f}",
                 "CurrencyCode": currency_code,
                 "IsRetry": bool(self.zimra_retry_count > 0),
             }
@@ -516,7 +520,7 @@ class AccountMove(models.Model):
                 "UnitAmount": f"{abs(unit_amount / quantity):.3f}" if quantity != 0 else "0.000",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line_amount):.2f}",
+                "LineAmount": f"{abs(line_amount-discount_amount):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(quantity):.3f}",
             }
@@ -524,6 +528,22 @@ class AccountMove(models.Model):
             line_items.append(line_item)
 
         return line_items
+
+    def get_discount_amounts(self):
+        """Get list of discount amounts from line items"""
+        discount_amounts = []
+
+        for line in self.invoice_line_ids:
+            if line.display_type in ['line_section', 'line_note']:
+                continue
+
+            if line.discount:
+                discount_amount = line.price_unit * line.quantity * line.discount / 100
+                if self.move_type == 'out_refund':
+                    discount_amount = abs(discount_amount)
+                discount_amounts.append(f"{abs(discount_amount):.2f}")
+
+        return discount_amounts
 
     def __create_timestamp(self, date_field):
         """Create timestamp in ISO format"""
