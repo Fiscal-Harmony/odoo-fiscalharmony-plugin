@@ -316,7 +316,7 @@ class PosOrder(models.Model):
             float(item.get("DiscountAmount", "0"))
             for item in line_items
         )
-        subtotal = self.amount_total - total_discount
+        subtotal = self.amount_total-total_discount
 
         is_refund = self.name.strip().endswith('REFUND')
 
@@ -331,7 +331,7 @@ class PosOrder(models.Model):
             "LineItems": line_items,
             "SubTotal": f"{subtotal - self.amount_tax:.2f}",
             "TotalTax": f"{self.amount_tax:.2f}",
-            "Total": f"{self.amount_total-total_discount:.2f}",
+            "Total": f"{self.amount_total:.2f}",
             "CurrencyCode": currency_code,
             "IsRetry": bool(self.zimra_retry_count > 0),
         }
@@ -347,7 +347,7 @@ class PosOrder(models.Model):
             "LineItems": line_items,
             "SubTotal": f"{abs(subtotal - self.amount_tax):.2f}",
             "TotalTax": f"{abs(self.amount_tax):.2f}",
-            "Total": f"{abs(self.amount_total-total_discount):.2f}",
+            "Total": f"{abs(self.amount_total):.2f}",
             "CurrencyCode": currency_code,
             "IsRetry": bool(self.zimra_retry_count > 0),
 
@@ -418,10 +418,10 @@ class PosOrder(models.Model):
             # Build the line item with absolute values
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(unit_amount-discount_amount):.3f}",
+                "UnitAmount": f"{abs(unit_amount):.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line_amount-discount_amount):.2f}",
+                "LineAmount": f"{abs(line_amount):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(quantity):.3f}",
             }
@@ -532,12 +532,13 @@ class PosOrder(models.Model):
                 discount_amount = line.price_unit * line.qty * line.discount / 100
 
             # Build the line item
+            unit_amtbefore = line.price_subtotal_incl/line.qty
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(line.price_subtotal_incl/line.qty)-discount_amount:.3f}",
+                "UnitAmount": f"{abs(unit_amtbefore+discount_amount):.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line.price_subtotal_incl-discount_amount):.2f}",
+                "LineAmount": f"{abs(line.price_subtotal_incl):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(line.qty):.3f}",
             }

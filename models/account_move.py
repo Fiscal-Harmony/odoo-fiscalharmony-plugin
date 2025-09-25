@@ -388,9 +388,9 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{abs(self.amount_untaxed)-total_discount:.2f}",
+                "SubTotal": f"{abs(self.amount_untaxed)-self.amount_tax:.2f}",
                 "TotalTax": f"{abs(self.amount_tax):.2f}",
-                "Total": f"{abs(self.amount_total-total_discount):.2f}",
+                "Total": f"{abs(self.amount_total):.2f}",
                 "CurrencyCode": currency_code,
                 "IsRetry": bool(self.zimra_retry_count > 0),
             }
@@ -405,9 +405,9 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{self.amount_untaxed-total_discount:.2f}",
+                "SubTotal": f"{self.amount_untaxed-self.amount_tax:.2f}",
                 "TotalTax": f"{self.amount_tax:.2f}",
-                "Total": f"{self.amount_total-total_discount:.2f}",
+                "Total": f"{self.amount_total:.2f}",
                 "CurrencyCode": currency_code,
                 "IsRetry": bool(self.zimra_retry_count > 0),
             }
@@ -515,12 +515,13 @@ class AccountMove(models.Model):
                 quantity = line.quantity
 
             # Build the line item
+            unit_amtbefore = unit_amount / quantity
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(unit_amount / quantity):.3f}" if quantity != 0 else "0.000",
+                "UnitAmount": f"{abs(unit_amtbefore + discount_amount):.3f}" if quantity != 0 else "0.000",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
-                "LineAmount": f"{abs(line_amount-discount_amount):.2f}",
+                "LineAmount": f"{abs(line_amount):.2f}",
                 "DiscountAmount": f"{abs(discount_amount):.2f}",
                 "Quantity": f"{abs(quantity):.3f}",
             }
