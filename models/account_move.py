@@ -428,12 +428,12 @@ class AccountMove(models.Model):
             tin, vat = self._parse_vat_field(self.partner_id.vat)
 
         return {
-            "Name": self.partner_id.name,
-            "Tin": tin,
-            "VatNumber": vat,
-            "Address": self._get_customer_address(),
-            "Phone": self.partner_id.phone or "",
-            "Email": self.partner_id.email or ""
+            "Name": self.partner_id.name or None,
+            "Tin": tin or None,
+            "VatNumber": vat or None,
+            "Address": self._get_customer_address() or None,
+            "Phone": self.partner_id.phone or None,
+            "Email": self.partner_id.email or None
         }
 
     def _parse_vat_field(self, vat_string):
