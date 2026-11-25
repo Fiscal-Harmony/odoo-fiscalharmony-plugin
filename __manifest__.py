@@ -20,6 +20,7 @@
     'web.assets_backend': [
         'zimra_fiscal/static/src/js/iscal_pdf_bus_listener.js',
         'zimra_fiscal/static/src/xml/show_fiscal_pdf.xml',
+        'zimra_fiscal/static/src/scss/fiscal_button.scss',
     ],
 },
     'data': [

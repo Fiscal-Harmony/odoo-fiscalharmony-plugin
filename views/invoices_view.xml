@@ -98,20 +98,14 @@
 
                     <notebook>
                         <page string="Request Data" name="request_data">
-                            <group>
                                 <field name="request_data" widget="ace" options="{'mode': 'json'}" nolabel="1"/>
-                            </group>
                         </page>
                         <page string="Response Data" name="response_data">
-                            <group>
                                 <field name="response_data" widget="ace" options="{'mode': 'json'}" nolabel="1"/>
-                            </group>
                         </page>
                         <page string="Error Details" name="error_details"
                               invisible="not error_message">
-                            <group>
                                 <field name="error_message" nolabel="1"/>
-                            </group>
                         </page>
                     </notebook>
                 </sheet>
@@ -358,7 +352,7 @@
                 <button name="action_fiscalize_invoice"
                         string="Fiscalize Invoice"
                         type="object"
-                        class="btn-primary"
+                        class="btn-primary o_fh_btn_fiscalize"
                         invisible="move_type not in ('out_invoice', 'out_refund') or state != 'posted' or zimra_status in ('fiscalized', 'sent')"
                         confirm="Are you sure you want to fiscalize this invoice with ZIMRA?"/>
             </xpath>
@@ -366,7 +360,7 @@
                 <button name="action_download_fiscal_pdf"
                         string="Download Fiscal Invoice"
                         type="object"
-                        class="btn-primary"
+                        class="btn-primary o_fh_btn_fiscalize"
                         invisible=" zimra_status not in ('fiscalized')"
                         />
             </xpath>

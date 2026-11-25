@@ -388,7 +388,7 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{abs(self.amount_untaxed)-self.amount_tax:.2f}",
+                "SubTotal": f"{abs(self.amount_untaxed):.2f}",
                 "TotalTax": f"{abs(self.amount_tax):.2f}",
                 "Total": f"{abs(self.amount_total):.2f}",
                 "CurrencyCode": currency_code,
@@ -405,7 +405,7 @@ class AccountMove(models.Model):
                 "BuyerContact": buyer_contact,
                 "Date": timestamp,
                 "LineItems": line_items,
-                "SubTotal": f"{self.amount_untaxed-self.amount_tax:.2f}",
+                "SubTotal": f"{self.amount_untaxed:.2f}",
                 "TotalTax": f"{self.amount_tax:.2f}",
                 "Total": f"{self.amount_total:.2f}",
                 "CurrencyCode": currency_code,
@@ -569,12 +569,14 @@ class AccountMove(models.Model):
         if not self.partner_id:
             return {}
 
-        return {
-            "Province": self.partner_id.state_id.name if self.partner_id.state_id else '',
-            "Street": self.partner_id.street2 or '',
-            "HouseNo": self.partner_id.street or '',
-            "City": self.partner_id.city or ''
+        address = {
+            "Province": self.partner_id.state_id.name if self.partner_id.state_id else None,
+            "Street": self.partner_id.street2,
+            "HouseNo": self.partner_id.street,
+            "City": self.partner_id.city
         }
+        
+        return address if any(address.values()) else None
 
     def action_post(self):
         """Override action_post to auto-fiscalize when invoice is posted"""

@@ -6,9 +6,20 @@ import requests
 import logging
 import re
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 
 _logger = logging.getLogger(__name__)
 
+TWO_PLACES = Decimal('0.01')
+THREE_PLACES = Decimal('0.001')
+
+def _to_decimal(value):
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+def _quant(value, places=TWO_PLACES):
+    return _to_decimal(value).quantize(places, rounding=ROUND_HALF_UP)
 
 class PosOrder(models.Model):
     _inherit = 'pos.order'
@@ -316,7 +327,7 @@ class PosOrder(models.Model):
             float(item.get("DiscountAmount", "0"))
             for item in line_items
         )
-        subtotal = self.amount_total-total_discount
+        subtotal = self.amount_total
 
         is_refund = self.name.strip().endswith('REFUND')
 
@@ -335,6 +346,8 @@ class PosOrder(models.Model):
             "CurrencyCode": currency_code,
             "IsRetry": bool(self.zimra_retry_count > 0),
         }
+        
+        creditnote_line_items =self.__get_creditnote_line_items(tax_mappings)
 
         creditnote = {
             "CreditNoteId": self.name,
@@ -344,8 +357,8 @@ class PosOrder(models.Model):
             "IsTaxInclusive": True,
             "BuyerContact": buyer_contact,
             "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            "LineItems": line_items,
-            "SubTotal": f"{abs(subtotal - self.amount_tax):.2f}",
+            "LineItems": creditnote_line_items,
+            "SubTotal": f"{abs(self.amount_total) - abs(self.amount_tax):.2f}",
             "TotalTax": f"{abs(self.amount_tax):.2f}",
             "Total": f"{abs(self.amount_total):.2f}",
             "CurrencyCode": currency_code,
@@ -405,20 +418,20 @@ class PosOrder(models.Model):
                 name = line.product_id.name
                 hscode = ''
 
-            # Calculate discount if applicable (ensure positive values)
-            discount_amount = 0
-            if line.discount:
-                discount_amount = abs(line.price_unit * line.qty * line.discount / 100)
+            
+            
+            
 
-            # Ensure all line item values are positive
-            unit_amount = abs(line.price_subtotal_incl)
+            
+            quantity = abs(line.qty) or 1
             line_amount = abs(line.price_subtotal_incl)
-            quantity = abs(line.qty)
+            unit_amount = _quant(line_amount /quantity, THREE_PLACES)
+            discount_amount = 0
 
             # Build the line item with absolute values
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(unit_amount):.3f}",
+                "UnitAmount": f"{unit_amount:.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
                 "LineAmount": f"{abs(line_amount):.2f}",
@@ -527,15 +540,22 @@ class PosOrder(models.Model):
                 hscode = ''
 
             # Calculate discount if applicable
-            discount_amount = 0
-            if line.discount:
-                discount_amount = line.price_unit * line.qty * line.discount / 100
+            qty = abs(line.qty) or 1
+            undiscounted = line.tax_ids.compute_all(
+                price_unit=abs(line.price_unit),
+                quantity=qty,
+                product=line.product_id,
+                partner=self.partner_id,
+            )['total_included']
+            unit_amount = _quant(undiscounted / qty, THREE_PLACES)
+            
+            discount_amount = float(_quant(unit_amount * _to_decimal(qty))) - abs(line.price_subtotal_incl)
 
             # Build the line item
             unit_amtbefore = line.price_subtotal_incl/line.qty
             line_item = {
                 "Description": name,
-                "UnitAmount": f"{abs(unit_amtbefore+discount_amount):.3f}",
+                "UnitAmount": f"{unit_amount:.3f}",
                 "TaxCode": tax_code,
                 "ProductCode": hscode,
                 "LineAmount": f"{abs(line.price_subtotal_incl):.2f}",
